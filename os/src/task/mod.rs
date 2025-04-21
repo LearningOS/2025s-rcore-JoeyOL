@@ -29,6 +29,7 @@ use lazy_static::*;
 pub use manager::{fetch_task, TaskManager};
 use switch::__switch;
 pub use task::{TaskControlBlock, TaskStatus};
+use crate::mm::MapPermission;
 
 pub use id::{kstack_alloc, pid_alloc, KernelStack, PidHandle};
 pub use manager::add_task;
@@ -119,4 +120,16 @@ lazy_static! {
 ///Add init process to the manager
 pub fn add_initproc() {
     add_task(INITPROC.clone());
+}
+
+/// 迁移ch4的mmap
+pub fn mmap(start: usize, len: usize, map_permission: MapPermission) -> isize {
+    let task = current_task().unwrap();
+    task.mmap(start, len, map_permission)
+}
+
+/// 迁移ch4的munmap
+pub fn munmap(start: usize, len: usize) -> isize {
+    let task = current_task().unwrap();
+    task.munmap(start, len)
 }

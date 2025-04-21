@@ -1,13 +1,21 @@
 //! Process management syscalls
-//!
+use crate::config::PAGE_SIZE;
+use crate::
+    task::{ exit_current_and_run_next, suspend_current_and_run_next, mmap, munmap}
+;
+
+use crate::mm::MapPermission;
+use crate::task::current_user_token;
+
+use crate::timer::get_time_ms;
+
 use alloc::sync::Arc;
 
 use crate::{
     fs::{open_file, OpenFlags},
     mm::{translated_refmut, translated_str},
     task::{
-        add_task, current_task, current_user_token, exit_current_and_run_next,
-        suspend_current_and_run_next,
+        add_task, current_task
     },
 };
 
@@ -106,29 +114,58 @@ pub fn sys_waitpid(pid: isize, exit_code_ptr: *mut i32) -> isize {
 /// HINT: You might reimplement it with virtual memory management.
 /// HINT: What if [`TimeVal`] is splitted by two pages ?
 pub fn sys_get_time(_ts: *mut TimeVal, _tz: usize) -> isize {
-    trace!(
-        "kernel:pid[{}] sys_get_time NOT IMPLEMENTED",
-        current_task().unwrap().pid.0
-    );
-    -1
+    trace!("kernel: sys_get_time");
+    let ts = translated_refmut::<TimeVal>(current_user_token(), _ts);
+    ts.sec = get_time_ms() / 1000;
+    ts.usec = (get_time_ms() % 1000) * 1000;
+    0
 }
+
 
 /// YOUR JOB: Implement mmap.
 pub fn sys_mmap(_start: usize, _len: usize, _port: usize) -> isize {
-    trace!(
-        "kernel:pid[{}] sys_mmap NOT IMPLEMENTED",
-        current_task().unwrap().pid.0
-    );
-    -1
+    trace!("kernel: sys_mmap NOT IMPLEMENTED YET!");
+    if _start % PAGE_SIZE != 0 
+        || (_port & !0x7 !=0) 
+        || (_port & 0x7 == 0) {
+        return -1;
+    }
+    else {
+        let start = _start;
+        let mut len = _len;
+        if len % PAGE_SIZE != 0 {
+            len += PAGE_SIZE - (len % PAGE_SIZE);
+        }
+        let mut map_permission = MapPermission::U;
+        if _port & 0x1 != 0 {
+            map_permission |= MapPermission::R;
+        }
+        if _port & 0x2 != 0 {
+            map_permission |= MapPermission::W;
+        }
+        if _port & 0x4 != 0 {
+            map_permission |= MapPermission::X;
+        }
+        let result = mmap(start, len, map_permission);
+        return result;
+    }
 }
 
 /// YOUR JOB: Implement munmap.
 pub fn sys_munmap(_start: usize, _len: usize) -> isize {
-    trace!(
-        "kernel:pid[{}] sys_munmap NOT IMPLEMENTED",
-        current_task().unwrap().pid.0
-    );
-    -1
+    trace!("kernel: sys_munmap NOT IMPLEMENTED YET!");
+    if _start % PAGE_SIZE != 0 {
+        return -1;
+    }
+    else {
+        let start = _start;
+        let mut len = _len;
+        if len % PAGE_SIZE != 0 {
+            len += PAGE_SIZE - (len % PAGE_SIZE);
+        }
+        let result = munmap(start, len);
+        return result;
+    }
 }
 
 /// change data segment size
