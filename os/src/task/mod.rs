@@ -15,11 +15,15 @@ mod switch;
 mod task;
 
 use crate::loader::{get_app_data, get_num_app};
+use crate::mm::MapPermission;
 use crate::sync::UPSafeCell;
+use crate::syscall::get_syscall_map;
 use crate::trap::TrapContext;
 use alloc::vec::Vec;
+use alloc::collections::btree_map::BTreeMap;
 use lazy_static::*;
 use switch::__switch;
+use task::TaskSyscallTracer;
 pub use task::{TaskControlBlock, TaskStatus};
 
 pub use context::TaskContext;
@@ -46,6 +50,7 @@ struct TaskManagerInner {
     tasks: Vec<TaskControlBlock>,
     /// id of current `Running` task
     current_task: usize,
+    sys_call_tracers: Vec<TaskSyscallTracer>,
 }
 
 lazy_static! {
@@ -58,12 +63,19 @@ lazy_static! {
         for i in 0..num_app {
             tasks.push(TaskControlBlock::new(get_app_data(i), i));
         }
+        let mut sys_call_tracers: Vec<TaskSyscallTracer> = Vec::new();
+        for _ in 0..num_app {
+            sys_call_tracers.push(TaskSyscallTracer {
+                syscall_counter: BTreeMap::new(),
+            });
+        }
         TaskManager {
             num_app,
             inner: unsafe {
                 UPSafeCell::new(TaskManagerInner {
                     tasks,
                     current_task: 0,
+                    sys_call_tracers
                 })
             },
         }
@@ -153,6 +165,43 @@ impl TaskManager {
             panic!("All applications completed!");
         }
     }
+    
+    fn add_syscall_counter(&self, syscall_id: usize) {
+        let mut inner = self.inner.exclusive_access();
+        let current = inner.current_task;
+        let idx = get_syscall_map(syscall_id);
+        let res = inner.sys_call_tracers[current].syscall_counter.get_mut(&idx);
+        if res.is_none() {
+            inner.sys_call_tracers[current].syscall_counter.insert(idx, 1);
+        } else {
+            let counter = res.unwrap();
+            *counter += 1;
+        }
+    }
+
+    fn get_syscall_counter(&self, syscall_id: usize) -> usize {
+        let inner = self.inner.exclusive_access();
+        let current = inner.current_task;
+        let idx = get_syscall_map(syscall_id);
+        let res = inner.sys_call_tracers[current].syscall_counter.get(&idx);
+        if res.is_none() {
+            0
+        } else {
+            *res.unwrap()
+        }
+    }
+
+    fn mmap(&self, start: usize, len: usize, map_permission: MapPermission) -> isize {
+        let mut inner = self.inner.exclusive_access();
+        let current = inner.current_task;
+        inner.tasks[current].mmap(start, len, map_permission)
+    }
+
+    fn munmap(&self, start: usize, len: usize) -> isize {
+        let mut inner = self.inner.exclusive_access();
+        let current = inner.current_task;
+        inner.tasks[current].munmap(start, len)
+    }
 }
 
 /// Run the first task in task list.
@@ -201,4 +250,31 @@ pub fn current_trap_cx() -> &'static mut TrapContext {
 /// Change the current 'Running' task's program break
 pub fn change_program_brk(size: i32) -> Option<usize> {
     TASK_MANAGER.change_current_program_brk(size)
+}
+
+
+/// Add syscall counter for the given syscall id.
+pub fn add_syscall_counter(syscall_id: usize) {
+    TASK_MANAGER.add_syscall_counter(syscall_id);
+}
+
+/// Get syscall counter for current task.
+pub fn get_syscall_counter(syscall_id: usize) -> usize {
+    TASK_MANAGER.get_syscall_counter(syscall_id)
+}
+
+/// Get the current task id.
+pub fn get_current_task() -> usize {
+    TASK_MANAGER.inner.exclusive_access().current_task
+}
+
+
+/// ch4 任务2.1
+pub fn mmap(start: usize, len: usize, map_permission: MapPermission) -> isize {
+    TASK_MANAGER.mmap(start, len, map_permission)
+}
+
+/// ch4 任务2.2
+pub fn munmap(start: usize, len: usize) -> isize {
+    TASK_MANAGER.munmap(start, len)
 }

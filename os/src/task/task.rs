@@ -1,6 +1,8 @@
 //! Types related to task management
+use alloc::collections::btree_map::BTreeMap;
+
 use super::TaskContext;
-use crate::config::TRAP_CONTEXT_BASE;
+use crate::config::{PAGE_SIZE, TRAP_CONTEXT_BASE};
 use crate::mm::{
     kernel_stack_position, MapPermission, MemorySet, PhysPageNum, VirtAddr, KERNEL_SPACE,
 };
@@ -13,6 +15,8 @@ pub struct TaskControlBlock {
 
     /// Maintain the execution status of the current process
     pub task_status: TaskStatus,
+
+/// The status of a task
 
     /// Application address space
     pub memory_set: MemorySet,
@@ -28,6 +32,11 @@ pub struct TaskControlBlock {
 
     /// Program break
     pub program_brk: usize,
+}
+
+#[derive(Clone)]
+pub struct TaskSyscallTracer {
+    pub syscall_counter: BTreeMap<usize, usize>,
 }
 
 impl TaskControlBlock {
@@ -95,6 +104,32 @@ impl TaskControlBlock {
         } else {
             None
         }
+    }
+
+    /// ch4 任务2.1
+    pub fn mmap(&mut self, start: usize, len: usize, map_permission: MapPermission) -> isize {
+        let ed;
+        if len % PAGE_SIZE != 0 {
+            ed = VirtAddr(start + (len / PAGE_SIZE + 1) * PAGE_SIZE);
+        }
+        else {
+            ed = VirtAddr(start + len);
+        }
+        let start = VirtAddr(start);
+        self.memory_set.mmap(start, ed, map_permission)
+    }
+
+    /// ch4 任务2.2
+    pub fn munmap(&mut self, start: usize, len: usize) -> isize {
+        let ed;
+        if len % PAGE_SIZE != 0 {
+            ed = VirtAddr(start + (len / PAGE_SIZE + 1) * PAGE_SIZE);
+        }
+        else {
+            ed = VirtAddr(start + len);
+        }
+        let start = VirtAddr(start);
+        self.memory_set.munmap(start, ed)
     }
 }
 
