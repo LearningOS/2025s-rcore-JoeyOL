@@ -17,8 +17,10 @@ mod task;
 use crate::config::MAX_APP_NUM;
 use crate::loader::{get_num_app, init_app_cx};
 use crate::sync::UPSafeCell;
+use crate::syscall::{ SYSCALL_EXIT, SYSCALL_GET_TIME, SYSCALL_TRACE, SYSCALL_WRITE, SYSCALL_YIELD};
 use lazy_static::*;
 use switch::__switch;
+use task::TaskSyscallTracer;
 pub use task::{TaskControlBlock, TaskStatus};
 
 pub use context::TaskContext;
@@ -45,6 +47,7 @@ pub struct TaskManagerInner {
     tasks: [TaskControlBlock; MAX_APP_NUM],
     /// id of current `Running` task
     current_task: usize,
+    sys_call_tracers: [TaskSyscallTracer; MAX_APP_NUM],
 }
 
 lazy_static! {
@@ -65,6 +68,9 @@ lazy_static! {
                 UPSafeCell::new(TaskManagerInner {
                     tasks,
                     current_task: 0,
+                    sys_call_tracers: [TaskSyscallTracer {
+                        syscall_counter: [0; 5],
+                    }; MAX_APP_NUM],
                 })
             },
         }
@@ -135,6 +141,21 @@ impl TaskManager {
             panic!("All applications completed!");
         }
     }
+    
+    fn add_syscall_counter(&self, syscall_id: usize) {
+        let mut inner = self.inner.exclusive_access();
+        let current = inner.current_task;
+        let idx = get_syscall_map(syscall_id);
+        inner.sys_call_tracers[current].syscall_counter[idx] += 1;
+        drop(inner);
+    }
+
+    fn get_syscall_counter(&self, syscall_id: usize) -> usize {
+        let inner = self.inner.exclusive_access();
+        let current = inner.current_task;
+        let idx = get_syscall_map(syscall_id);
+        inner.sys_call_tracers[current].syscall_counter[idx]
+    }
 }
 
 /// Run the first task in task list.
@@ -168,4 +189,31 @@ pub fn suspend_current_and_run_next() {
 pub fn exit_current_and_run_next() {
     mark_current_exited();
     run_next_task();
+}
+
+/// Get the syscall map for the given syscall id.
+pub fn get_syscall_map(syscall_id: usize) -> usize {
+    match syscall_id {
+        SYSCALL_EXIT => 0,
+        SYSCALL_GET_TIME => 1,
+        SYSCALL_TRACE => 2, 
+        SYSCALL_WRITE => 3,
+        SYSCALL_YIELD => 4,
+        _ => panic!("Unsupported syscall_id: {}", syscall_id),
+    }
+} 
+
+/// Add syscall counter for the given syscall id.
+pub fn add_syscall_counter(syscall_id: usize) {
+    TASK_MANAGER.add_syscall_counter(syscall_id);
+}
+
+/// Get syscall counter for current task.
+pub fn get_syscall_counter(syscall_id: usize) -> usize {
+    TASK_MANAGER.get_syscall_counter(syscall_id)
+}
+
+/// Get the current task id.
+pub fn get_current_task() -> usize {
+    TASK_MANAGER.inner.exclusive_access().current_task
 }

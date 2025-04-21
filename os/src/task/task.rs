@@ -11,6 +11,11 @@ pub struct TaskControlBlock {
     pub task_cx: TaskContext,
 }
 
+#[derive(Copy, Clone)]
+pub struct TaskSyscallTracer {
+    pub syscall_counter: [usize; 5],
+}
+
 /// The status of a task
 #[derive(Copy, Clone, PartialEq)]
 pub enum TaskStatus {
