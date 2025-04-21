@@ -2,12 +2,13 @@
 use super::TaskContext;
 use super::{kstack_alloc, pid_alloc, KernelStack, PidHandle};
 use crate::config::TRAP_CONTEXT_BASE;
-use crate::mm::{MemorySet, PhysPageNum, VirtAddr, KERNEL_SPACE};
+use crate::mm::{MemorySet, PhysPageNum, VirtAddr, KERNEL_SPACE, MapPermission};
 use crate::sync::UPSafeCell;
 use crate::trap::{trap_handler, TrapContext};
 use alloc::sync::{Arc, Weak};
 use alloc::vec::Vec;
 use core::cell::RefMut;
+use crate::config::PAGE_SIZE;
 
 /// Task control block structure
 ///
@@ -49,6 +50,8 @@ pub struct TaskControlBlockInner {
 
     /// Maintain the execution status of the current process
     pub task_status: TaskStatus,
+
+/// The status of a task
 
     /// Application address space
     pub memory_set: MemorySet,
@@ -235,6 +238,34 @@ impl TaskControlBlock {
         } else {
             None
         }
+    }
+
+    /// ch4 任务2.1
+    pub fn mmap(&self, start: usize, len: usize, map_permission: MapPermission) -> isize {
+        let ed;
+        if len % PAGE_SIZE != 0 {
+            ed = VirtAddr(start + (len / PAGE_SIZE + 1) * PAGE_SIZE);
+        }
+        else {
+            ed = VirtAddr(start + len);
+        }
+        let start = VirtAddr(start);
+        let mut inner = self.inner_exclusive_access();
+        inner.memory_set.mmap(start, ed, map_permission)
+    }
+
+    /// ch4 任务2.2
+    pub fn munmap(&self, start: usize, len: usize) -> isize {
+        let ed;
+        if len % PAGE_SIZE != 0 {
+            ed = VirtAddr(start + (len / PAGE_SIZE + 1) * PAGE_SIZE);
+        }
+        else {
+            ed = VirtAddr(start + len);
+        }
+        let start = VirtAddr(start);
+        let mut inner = self.inner_exclusive_access();
+        inner.memory_set.munmap(start, ed)
     }
 }
 
