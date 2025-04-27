@@ -1,4 +1,6 @@
 //! Process management syscalls
+use core::usize;
+
 use crate::config::PAGE_SIZE;
 use crate::
     task::{ exit_current_and_run_next, get_syscall_counter, suspend_current_and_run_next, mmap, munmap}
@@ -36,19 +38,17 @@ pub fn sys_yield() -> isize {
 /// HINT: What if [`TimeVal`] is splitted by two pages ?
 pub fn sys_get_time(_ts: *mut TimeVal, _tz: usize) -> isize {
     trace!("kernel: sys_get_time");
-    let page_table = PageTable::from_token(current_user_token());
-    let vpn = VirtAddr(_ts as usize);
-    let res = page_table.translate(vpn.floor());
-    if res.is_none() || !res.unwrap().user() || !res.unwrap().writable() {
-        // if the page is not valid, return -1
-        return -1;
-    }
-    let mut ppn: usize = PhysAddr::from(res.unwrap().ppn()).into();
-    ppn = ppn + (vpn.page_offset() as usize);
-    unsafe {
-        let ts = &mut *(ppn as *mut TimeVal);
-        ts.sec = get_time_ms() / 1000;
-        ts.usec = (get_time_ms() % 1000) * 1000;
+    if let Some(entry) = PageTable::from_token(current_user_token())
+        .translate(VirtAddr(_ts as usize).floor()) 
+    {
+        if entry.user() && entry.writable() {
+            let ppn: usize = PhysAddr::from(entry.ppn()).0 + VirtAddr(_ts as usize).page_offset();
+            unsafe {
+                let ts = &mut *(ppn as *mut TimeVal);
+                ts.sec = get_time_ms() / 1000;
+                ts.usec = (get_time_ms() % 1000) * 1000;
+            }
+        }
     }
     0
 }
@@ -64,52 +64,35 @@ pub fn sys_trace(_trace_request: usize, _id: usize, _data: usize) -> isize {
     trace!("kernel: sys_trace");
     match _trace_request {
         0 => {
-            // read a byte from the address pointed by id
-            let page_table = PageTable::from_token(current_user_token());
-            let vpn = VirtAddr(_id);
-            let res = page_table.translate(vpn.floor());
-            if res.is_none() || !res.unwrap().user() || !res.unwrap().readable() {
-                // if the page is not valid, return -1
-                return -1;
-            }
-            let mut ppn: usize = PhysAddr::from(res.unwrap().ppn()).into();
-            ppn = ppn + (vpn.page_offset() as usize);
-            unsafe {
-                let data = *(ppn as *const u8);
-                return data as isize;
-            }
-        }
-        1 => {
-            // write a byte to the address pointed by id
-            let page_table = PageTable::from_token(current_user_token());
-            let vpn = VirtAddr(_id);
-            let res = page_table.translate(vpn.floor());
-            if let Some(ppn) = res {
-                if !ppn.user() || !ppn.writable() {
-                    // if the page is not valid, return -1
-                    return -1;
+            // Read a byte from the address pointed by id
+            if let Some(entry) = PageTable::from_token(current_user_token())
+                .translate(VirtAddr(_id).floor())
+            {
+                if entry.user() && entry.readable() {
+                    let ppn:usize = PhysAddr::from(entry.ppn()).0 + VirtAddr(_id).page_offset();
+                    unsafe { return *(ppn as *const u8) as isize; }
                 }
-                let mut ppn: usize = PhysAddr::from(ppn.ppn()).into();
-                ppn = ppn + (vpn.page_offset() as usize);
-                unsafe {
-                    *(ppn as *mut u8) = _data as u8;
-                }
-            } else {
-                // if the page is not valid, return -1
-                return -1;
             }
-            return 0;
-        }
-        2 => {
-            // get syscall counter
-            let syscall_id = _id;
-            let count = get_syscall_counter(syscall_id);
-            // panic!("task:{}, syscall_id: {}, count: {}, map_id:{}",get_current_task(), syscall_id, count, get_syscall_map(syscall_id));
-            return count as isize;
-        }
-        _ => {
             -1
         }
+        1 => {
+            // Write a byte to the address pointed by id
+            if let Some(entry) = PageTable::from_token(current_user_token())
+                .translate(VirtAddr(_id).floor())
+            {
+                if entry.user() && entry.writable() {
+                    let ppn: usize= PhysAddr::from(entry.ppn()).0 + VirtAddr(_id).page_offset();
+                    unsafe { *(ppn as *mut u8) = _data as u8; }
+                    return 0;
+                }
+            }
+            -1
+        }
+        2 => {
+            // Get syscall counter
+            get_syscall_counter(_id) as isize
+        }
+        _ => -1,
     }
 }
 
