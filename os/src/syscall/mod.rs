@@ -51,17 +51,18 @@ pub fn syscall(syscall_id: usize, args: [usize; 3]) -> isize {
     }
 }
 
-/// Get the syscall map for the given syscall id.
-pub fn get_syscall_map(syscall_id: usize) -> usize {
-    match syscall_id {
-        SYSCALL_EXIT => 0,
-        SYSCALL_GET_TIME => 1,
-        SYSCALL_TRACE => 2, 
-        SYSCALL_WRITE => 3,
-        SYSCALL_YIELD => 4,
-        SYSCALL_MMAP => 5,
-        SYSCALL_MUNMAP => 6,
-        SYSCALL_SBRK => 7,
-        _ => panic!("Unsupported syscall_id: {}", syscall_id),
-    }
-}
+// Get the syscall map for the given syscall id.
+// 实验4之后使用BTreeMap来存储syscall的映射关系
+// pub fn get_syscall_map(syscall_id: usize) -> usize {
+//     match syscall_id {
+//         SYSCALL_EXIT => 0,
+//         SYSCALL_GET_TIME => 1,
+//         SYSCALL_TRACE => 2, 
+//         SYSCALL_WRITE => 3,
+//         SYSCALL_YIELD => 4,
+//         SYSCALL_MMAP => 5,
+//         SYSCALL_MUNMAP => 6,
+//         SYSCALL_SBRK => 7,
+//         _ => panic!("Unsupported syscall_id: {}", syscall_id),
+//     }
+// }

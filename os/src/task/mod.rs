@@ -17,7 +17,6 @@ mod task;
 use crate::loader::{get_app_data, get_num_app};
 use crate::mm::MapPermission;
 use crate::sync::UPSafeCell;
-use crate::syscall::get_syscall_map;
 use crate::trap::TrapContext;
 use alloc::vec::Vec;
 use alloc::collections::btree_map::BTreeMap;
@@ -169,10 +168,9 @@ impl TaskManager {
     fn add_syscall_counter(&self, syscall_id: usize) {
         let mut inner = self.inner.exclusive_access();
         let current = inner.current_task;
-        let idx = get_syscall_map(syscall_id);
-        let res = inner.sys_call_tracers[current].syscall_counter.get_mut(&idx);
+        let res = inner.sys_call_tracers[current].syscall_counter.get_mut(&syscall_id);
         if res.is_none() {
-            inner.sys_call_tracers[current].syscall_counter.insert(idx, 1);
+            inner.sys_call_tracers[current].syscall_counter.insert(syscall_id, 1);
         } else {
             let counter = res.unwrap();
             *counter += 1;
@@ -182,8 +180,7 @@ impl TaskManager {
     fn get_syscall_counter(&self, syscall_id: usize) -> usize {
         let inner = self.inner.exclusive_access();
         let current = inner.current_task;
-        let idx = get_syscall_map(syscall_id);
-        let res = inner.sys_call_tracers[current].syscall_counter.get(&idx);
+        let res = inner.sys_call_tracers[current].syscall_counter.get(&syscall_id);
         if res.is_none() {
             0
         } else {
