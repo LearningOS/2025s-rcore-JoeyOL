@@ -4,11 +4,11 @@
 //!
 //! `UPSafeCell<OSInodeInner>` -> `OSInode`: for static `ROOT_INODE`,we
 //! need to wrap `OSInodeInner` into `UPSafeCell`
-use super::File;
+use super::{File, StatMode};
 use crate::drivers::BLOCK_DEVICE;
 use crate::mm::UserBuffer;
 use crate::sync::UPSafeCell;
-use alloc::sync::Arc;
+use alloc::{collections::btree_map::BTreeMap, sync::Arc};
 use alloc::vec::Vec;
 use bitflags::*;
 use easy_fs::{EasyFileSystem, Inode};
@@ -25,16 +25,59 @@ pub struct OSInode {
 /// The OS inode inner in 'UPSafeCell'
 pub struct OSInodeInner {
     offset: usize,
+    mode: StatMode,
     inode: Arc<Inode>,
+}
+
+pub struct LinkManager {
+    inode_to_link_count_map: BTreeMap<u32, u32>,
+}
+
+
+impl LinkManager {
+    pub fn get_link_count(&mut self, inode_id: u32) -> u32 {
+        if let Some(ret) = self.inode_to_link_count_map.get(&inode_id) {
+            *ret
+        } else {
+            // 一开始加载的应用程序不会有链接计数
+            self.increase_link_count(inode_id);
+            1
+        }
+    }
+    pub fn descrease_link_count(&mut self, inode_id: u32) -> Option<()> {
+        if let Some(count) = self.inode_to_link_count_map.get_mut(&inode_id) {
+            if *count > 1 {
+                *count -= 1;
+                Some(())
+            } else {
+                self.inode_to_link_count_map.remove(&inode_id);
+                None
+            }
+        } else {
+            None
+        }
+    }
+    pub fn increase_link_count(&mut self, inode_id: u32) {
+        if let Some(count) = self.inode_to_link_count_map.get_mut(&inode_id) {
+            *count += 1;
+        } else {
+            self.inode_to_link_count_map.insert(inode_id, 1);
+        }
+    }
 }
 
 impl OSInode {
     /// create a new inode in memory
     pub fn new(readable: bool, writable: bool, inode: Arc<Inode>) -> Self {
+        let mode = if inode.is_dir() {
+            StatMode::DIR
+        } else {
+            StatMode::FILE
+        };
         Self {
             readable,
             writable,
-            inner: unsafe { UPSafeCell::new(OSInodeInner { offset: 0, inode }) },
+            inner: unsafe { UPSafeCell::new(OSInodeInner { offset: 0, mode, inode }) },
         }
     }
     /// read all data from the inode
@@ -59,6 +102,15 @@ lazy_static! {
     pub static ref ROOT_INODE: Arc<Inode> = {
         let efs = EasyFileSystem::open(BLOCK_DEVICE.clone());
         Arc::new(EasyFileSystem::root_inode(&efs))
+    };
+    pub static ref LINK_MANAGER: UPSafeCell<LinkManager> = {
+        let mut inode_to_link_count_map = BTreeMap::new();
+        inode_to_link_count_map.insert(ROOT_INODE.get_inode_id(), 1);
+        unsafe {
+            UPSafeCell::new(LinkManager {
+                inode_to_link_count_map,
+            })
+        }
     };
 }
 
@@ -111,9 +163,11 @@ pub fn open_file(name: &str, flags: OpenFlags) -> Option<Arc<OSInode>> {
             Some(Arc::new(OSInode::new(readable, writable, inode)))
         } else {
             // create file
-            ROOT_INODE
+            let ret = ROOT_INODE
                 .create(name)
-                .map(|inode| Arc::new(OSInode::new(readable, writable, inode)))
+                .map(|inode| Arc::new(OSInode::new(readable, writable, inode)));
+            LINK_MANAGER.exclusive_access().increase_link_count(ret.as_ref().unwrap().inner.exclusive_access().inode.get_inode_id());
+            ret
         }
     } else {
         ROOT_INODE.find(name).map(|inode| {
@@ -122,6 +176,49 @@ pub fn open_file(name: &str, flags: OpenFlags) -> Option<Arc<OSInode>> {
             }
             Arc::new(OSInode::new(readable, writable, inode))
         })
+    }
+}
+
+/// linkat syscall
+pub fn linkat(old_name: &str, new_name: &str) -> isize {
+    // 判断是否同名
+    if old_name == new_name {
+        return -1;
+    }
+    // 判断是否存在
+    if let Some(inode) = ROOT_INODE.find(old_name) {
+        // 判断是否已经存在
+        if let Some(_) = ROOT_INODE.find(new_name) {
+            return -1;
+        }
+        // 创建新文件
+        ROOT_INODE.linkat(inode.get_inode_id(), new_name);
+        // list_apps();
+        // println!("kernel: sys_linkat old_name: {}, new_name: {}", old_name, new_name);
+        LINK_MANAGER.exclusive_access().increase_link_count(inode.get_inode_id());
+        0
+    } else {
+        return -1;
+    }
+}
+
+/// unlink syscall
+pub fn unlink(name: &str) -> isize{
+    // 判断是否存在
+    if let Some(inode) = ROOT_INODE.find(name) {
+        // 减少链接计数
+        if LINK_MANAGER.exclusive_access().descrease_link_count(inode.get_inode_id()).is_none() {
+            // 删除文件
+            ROOT_INODE.unlink(name, true);
+        }
+        else {
+            // 删除文件
+            ROOT_INODE.unlink(name, false);
+        }
+        // list_apps();
+        0
+    } else {
+        -1
     }
 }
 
@@ -155,5 +252,17 @@ impl File for OSInode {
             total_write_size += write_size;
         }
         total_write_size
+    }
+    fn stat(&self) -> super::Stat {
+        let inner = self.inner.exclusive_access();
+        super::Stat {
+            dev: 0,
+            ino: inner.inode.get_inode_id() as u64,
+            mode: inner.mode,
+            nlink: LINK_MANAGER
+                .exclusive_access()
+                .get_link_count(inner.inode.get_inode_id()),
+            pad: [0; 7],
+        }
     }
 }

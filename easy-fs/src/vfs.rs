@@ -138,6 +138,101 @@ impl Inode {
         )))
         // release efs lock automatically by compiler
     }
+    /// Remove inode under current inode by name
+    /// TODO: 如果删除的目录项刚好够一个块，需要回收这个数据块
+    pub fn remove(&self, name: &str, empty_data: bool) {
+        let mut fs = self.fs.lock();
+        if let Some((i, inode_id, file_count)) = self.read_disk_inode(|root_inode| {
+            // assert it is a directory
+            // assert!(root_inode.is_dir());
+            // find the file
+            let _file_count = (root_inode.size as usize) / DIRENT_SZ;
+            let mut dirent = DirEntry::empty();
+            for _i in 0.._file_count {
+                assert_eq!(
+                    root_inode.read_at(DIRENT_SZ * _i, dirent.as_bytes_mut(), &self.block_device,),
+                    DIRENT_SZ,
+                );
+                if dirent.name() == name {
+                    // remove the file
+                    let _inode_id = dirent.inode_id();
+                    return Some((_i, _inode_id, _file_count));
+                }
+            }
+            None
+        }) 
+        {
+            // 将后续的file entry前移
+            for j in (i + 1)..file_count {
+                let mut dirent = DirEntry::empty();
+                assert_eq!(
+                    self.read_disk_inode(|root_inode| {
+                        root_inode.read_at(DIRENT_SZ * j, 
+                            dirent.as_bytes_mut(), 
+                            &self.block_device)
+                    }),
+                    DIRENT_SZ,
+                );
+                assert_eq!(
+                    self.modify_disk_inode(|root_inode| {
+                        root_inode.write_at(
+                            (j - 1) * DIRENT_SZ,
+                            dirent.as_bytes(),
+                            &self.block_device,
+                        )
+                    }),
+                    DIRENT_SZ,
+                );
+            }
+            // 删除最后一个entry
+            self.modify_disk_inode(|root_inode| {
+                root_inode.size -= DIRENT_SZ as u32;
+            });
+            // 释放数据块
+            if empty_data {
+                let (block_id, block_offset) = fs.get_disk_inode_pos(inode_id);
+                get_block_cache(block_id as usize, Arc::clone(&self.block_device))
+                    .lock()
+                    .modify(block_offset, |disk_inode: &mut DiskInode| {
+                        let old_size = disk_inode.size;
+                        let data_blocks_dealloc = disk_inode.clear_size(&self.block_device);
+                        assert!(data_blocks_dealloc.len() == DiskInode::total_blocks(old_size) as usize);
+                        for data_block in data_blocks_dealloc.into_iter() {
+                            fs.dealloc_data(data_block);
+                        }
+                    });
+                // 释放inode只需回收inode编号
+                fs.dealloc_inode(inode_id);
+            }
+
+            block_cache_sync_all();
+        }
+    }
+
+    /// linkat
+    pub fn linkat(&self, inode_id: u32, new_name: &str,
+    ) -> () {
+        let mut fs = self.fs.lock();
+        self.modify_disk_inode(|root_inode| {
+            // append file in the dirent
+            let file_count = (root_inode.size as usize) / DIRENT_SZ;
+            let new_size = (file_count + 1) * DIRENT_SZ;
+            // increase size
+            self.increase_size(new_size as u32, root_inode, &mut fs);
+            // write dirent
+            let dirent = DirEntry::new(new_name, inode_id);
+            root_inode.write_at(
+                file_count * DIRENT_SZ,
+                dirent.as_bytes(),
+                &self.block_device,
+            );
+        });
+    }
+
+    /// unlinkat
+    pub fn unlink(&self, name: &str, empty_data: bool) -> () {
+        self.remove(name, empty_data);
+    }
     /// List inodes under current inode
     pub fn ls(&self) -> Vec<String> {
         let _fs = self.fs.lock();
@@ -182,5 +277,15 @@ impl Inode {
             }
         });
         block_cache_sync_all();
+    }
+    /// get inode
+    pub fn get_inode_id(&self) -> u32 {
+        let _fs = self.fs.lock();
+        _fs.get_disk_inode_id(self.block_id as u32, self.block_offset)
+    }
+    /// 判断是不是目录
+    pub fn is_dir(&self) -> bool {
+        let _fs = self.fs.lock();
+        self.read_disk_inode(|disk_inode| disk_inode.is_dir())
     }
 }
