@@ -71,6 +71,11 @@ pub struct TaskControlBlockInner {
 
     /// Program break
     pub program_brk: usize,
+
+    /// ch5 Stride调度算法: Process Priority
+    pub priority: usize,
+    /// ch5 Stride调度算法: Process Pass Value
+    pub stride: usize,
 }
 
 impl TaskControlBlockInner {
@@ -121,6 +126,8 @@ impl TaskControlBlock {
                     exit_code: 0,
                     heap_bottom: user_sp,
                     program_brk: user_sp,
+                    priority: 16,
+                    stride: 0,
                 })
             },
         };
@@ -194,6 +201,9 @@ impl TaskControlBlock {
                     exit_code: 0,
                     heap_bottom: parent_inner.heap_bottom,
                     program_brk: parent_inner.program_brk,
+                    // ch5 Stride调度算法: 测试用例使用spawn函数创建子进程，fork无所谓了
+                    priority: parent_inner.priority,
+                    stride: parent_inner.stride,
                 })
             },
         });
@@ -235,6 +245,9 @@ impl TaskControlBlock {
                     exit_code: 0,
                     heap_bottom: user_sp,
                     program_brk: user_sp,
+                    // ch5 Stride调度算法: 测试用例使用spawn函数创建子进程，fork无所谓了
+                    priority: 16,
+                    stride: 0,
                     })
                 },
             });
