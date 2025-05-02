@@ -41,6 +41,11 @@ pub struct ProcessControlBlockInner {
     pub signals: SignalFlags,
     /// tasks(also known as threads)
     pub tasks: Vec<Option<Arc<TaskControlBlock>>>,
+    /// available mutex_locks
+    pub mutex_locks: Vec<isize>,
+    /// available semaphores
+    pub semaphores: Vec<isize>,
+    pub deadlock_detect: bool,
     /// task resource allocator
     pub task_res_allocator: RecycleAllocator,
     /// mutex list
@@ -119,6 +124,9 @@ impl ProcessControlBlock {
                     mutex_list: Vec::new(),
                     semaphore_list: Vec::new(),
                     condvar_list: Vec::new(),
+                    mutex_locks: Vec::new(),
+                    semaphores: Vec::new(),
+                    deadlock_detect: false,
                 })
             },
         });
@@ -245,6 +253,9 @@ impl ProcessControlBlock {
                     mutex_list: Vec::new(),
                     semaphore_list: Vec::new(),
                     condvar_list: Vec::new(),
+                    mutex_locks: Vec::new(),
+                    semaphores: Vec::new(),
+                    deadlock_detect: false,
                 })
             },
         });
@@ -281,5 +292,60 @@ impl ProcessControlBlock {
     /// get pid
     pub fn getpid(&self) -> usize {
         self.pid.0
+    }
+    pub fn deadlock_detect(&self, semaphore: bool) -> bool {
+        if !self.inner_exclusive_access().deadlock_detect {
+            return false;
+        }
+        let inner = self.inner_exclusive_access();
+        let mut work = if semaphore {
+            inner.semaphores.clone()
+        } else {
+            inner.mutex_locks.clone()
+        };
+        let mut needed: Vec<Vec<isize>> = Vec::new();
+        let mut allocated: Vec<Vec<isize>> = Vec::new();
+        for thread in inner.tasks.clone(){
+            let thread_inner = thread.as_ref().unwrap().inner_exclusive_access();
+            if thread_inner.res.is_none() {
+                continue;
+            }
+            let thread_inner_res = thread_inner.res.as_ref().unwrap();
+            needed.push(thread_inner_res.get_needed_matrix(work.len(), semaphore));
+            allocated.push(thread_inner_res.get_allocated_matrix(work.len(), semaphore, &mut work));
+        }
+        let mut finish = vec![false; needed.len()];
+        loop {
+            let mut found = false;
+            for i in 0..needed.len() {
+                if finish[i] {
+                    continue;
+                }
+                let mut can_finish = true;
+                for j in 0..work.len() {
+                    if needed[i][j] > work[j] {
+                        can_finish = false;
+                        break;
+                    }
+                }
+                if can_finish {
+                    found = true;
+                    finish[i] = true;
+                    for j in 0..work.len() {
+                        work[j] += allocated[i][j];
+                    }
+                }
+            }
+            if !found {
+                break; 
+            }
+
+        }
+        for i in 0..needed.len() {
+            if !finish[i] {
+                return true;
+            }
+        }
+        return false
     }
 }

@@ -4,6 +4,8 @@ use super::ProcessControlBlock;
 use crate::config::{KERNEL_STACK_SIZE, PAGE_SIZE, TRAMPOLINE, TRAP_CONTEXT_BASE, USER_STACK_SIZE};
 use crate::mm::{MapPermission, PhysPageNum, VirtAddr, KERNEL_SPACE};
 use crate::sync::UPSafeCell;
+use alloc::collections::btree_map::BTreeMap;
+use alloc::vec;
 use alloc::{
     sync::{Arc, Weak},
     vec::Vec,
@@ -132,6 +134,12 @@ pub struct TaskUserRes {
     pub tid: usize,
     /// user stack base
     pub ustack_base: usize,
+    /// mutex 
+    pub mutex_lock_allocated: BTreeMap<usize, isize>,
+    pub mutex_lock_needed: BTreeMap<usize, isize>,
+    /// semaphore 
+    pub semaphore_allocated: BTreeMap<usize, isize>,
+    pub semaphore_needed: BTreeMap<usize, isize>,
     /// process belongs to
     pub process: Weak<ProcessControlBlock>,
 }
@@ -155,6 +163,10 @@ impl TaskUserRes {
         let task_user_res = Self {
             tid,
             ustack_base,
+            mutex_lock_allocated: BTreeMap::new(),
+            mutex_lock_needed: BTreeMap::new(),
+            semaphore_allocated: BTreeMap::new(),
+            semaphore_needed: BTreeMap::new(),
             process: Arc::downgrade(&process),
         };
         if alloc_user_res {
@@ -238,6 +250,69 @@ impl TaskUserRes {
     /// the top addr (high addr) of the user stack for a task
     pub fn ustack_top(&self) -> usize {
         ustack_bottom_from_tid(self.ustack_base, self.tid) + USER_STACK_SIZE
+    }
+    #[allow(unused)]
+    pub fn chg_lock_needed(&mut self, mutex_id: usize, value: isize, semaphore: bool) {
+        let lock_needed = if semaphore {
+            & mut self.semaphore_needed
+        } else {
+            & mut self.mutex_lock_needed
+        };
+        if let Some(_value) = lock_needed.get_mut(&mutex_id) {
+            *_value += value;
+        } else {
+            if value < 0 {
+                panic!("mutex lock needed < 0");
+            }
+            lock_needed.insert(mutex_id, value);
+        }
+    }
+    pub fn chg_lock_allocated(&mut self, mutex_id: usize, value: isize, semaphore: bool) {
+        let lock_allocated = if semaphore {
+            & mut self.semaphore_allocated
+        } else {
+            & mut self.mutex_lock_allocated
+        };
+        if let Some(_value) = lock_allocated.get_mut(&mutex_id) {
+            *_value += value;
+        } else {
+            lock_allocated.insert(mutex_id, value);
+        }
+    }
+    pub fn get_needed_matrix(&self, lock_total: usize, semaphore: bool) -> Vec<isize> {
+        let lock_needed = if semaphore {
+            &self.semaphore_needed
+        } else {
+            &self.mutex_lock_needed
+        };
+        let mut needed_matrix = vec![0; lock_total];
+        for lock_id in 0..lock_total {
+            if let Some(value) = lock_needed.get(&lock_id) {
+                needed_matrix[lock_id] = *value;
+            }
+            else {
+                needed_matrix[lock_id] = 0;
+            }
+        }
+        needed_matrix
+    }
+    pub fn get_allocated_matrix(&self, lock_total: usize, semaphore: bool, work: & mut Vec<isize>) -> Vec<isize> {
+        let lock_allocated = if semaphore {
+            &self.semaphore_allocated
+        } else {
+            &self.mutex_lock_allocated
+        };
+        let mut allocated_matrix = vec![0; lock_total];
+        for lock_id in 0..lock_total {
+            if let Some(value) = lock_allocated.get(&lock_id) {
+                allocated_matrix[lock_id] = *value;
+                work[lock_id] -= *value;
+            }
+            else {
+                allocated_matrix[lock_id] = 0;
+            }
+        }
+        allocated_matrix
     }
 }
 
