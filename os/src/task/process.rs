@@ -306,6 +306,9 @@ impl ProcessControlBlock {
         let mut needed: Vec<Vec<isize>> = Vec::new();
         let mut allocated: Vec<Vec<isize>> = Vec::new();
         for thread in inner.tasks.clone(){
+            if thread.is_none() {
+                continue;
+            }
             let thread_inner = thread.as_ref().unwrap().inner_exclusive_access();
             if thread_inner.res.is_none() {
                 continue;
